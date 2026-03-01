@@ -75,16 +75,18 @@ func mainImpl(args []string, getEnvVal func(string) string, getEnviron func() []
 
 	logger := setupLogger(out, cfg.LogFormat, cfg.LogLevel)
 
-	ctx := context.Background()
-	tp, err := initTracer(ctx, os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
-	if err != nil {
-		logger.Error(fmt.Sprintf("failed to initialize OpenTelemetry tracer: %v", err))
-	} else {
-		defer func() {
-			if err := tp.Shutdown(ctx); err != nil {
-				logger.Error(fmt.Sprintf("failed to shutdown TracerProvider: %v", err))
-			}
-		}()
+	if cfg.EnableTracing {
+		ctx := context.Background()
+		tp, err := initTracer(ctx, os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+		if err != nil {
+			logger.Error(fmt.Sprintf("failed to initialize OpenTelemetry tracer: %v", err))
+		} else {
+			defer func() {
+				if err := tp.Shutdown(ctx); err != nil {
+					logger.Error(fmt.Sprintf("failed to shutdown TracerProvider: %v", err))
+				}
+			}()
+		}
 	}
 
 	opts := []httpbin.OptionFunc{
@@ -109,12 +111,22 @@ func mainImpl(args []string, getEnvVal func(string) string, getEnviron func() []
 	app := httpbin.New(opts...)
 
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", metricsEndpoint())
-	mux.Handle("/", metricsHandler(otelhttp.NewHandler(app.Handler(), "go-httpbin",
-		otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
-			return fmt.Sprintf("%s %s", r.Method, r.URL.Path)
-		}),
-	)))
+	var handler http.Handler = app.Handler()
+
+	if cfg.EnableTracing {
+		handler = otelhttp.NewHandler(handler, "go-httpbin",
+			otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
+				return fmt.Sprintf("%s %s", r.Method, r.URL.Path)
+			}),
+		)
+	}
+
+	if cfg.EnableMetrics {
+		handler = metricsHandler(handler)
+		mux.Handle("/metrics", metricsEndpoint())
+	}
+
+	mux.Handle("/", handler)
 
 	srv := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.ListenPort)),
@@ -160,6 +172,9 @@ type config struct {
 	// absolutely necessary.
 	UnsafeAllowDangerousResponses bool
 
+	EnableMetrics bool
+	EnableTracing bool
+
 	// temporary placeholders for arguments that need extra processing
 	rawAllowedRedirectDomains string
 	rawLogLevel               string
@@ -202,6 +217,9 @@ func loadConfig(args []string, getEnvVal func(string) string, getEnviron func() 
 	fs.IntVar(&cfg.SrvMaxHeaderBytes, "srv-max-header-bytes", defaultSrvMaxHeaderBytes, "Value to use for the http.Server's MaxHeaderBytes option")
 	fs.DurationVar(&cfg.SrvReadHeaderTimeout, "srv-read-header-timeout", defaultSrvReadHeaderTimeout, "Value to use for the http.Server's ReadHeaderTimeout option")
 	fs.DurationVar(&cfg.SrvReadTimeout, "srv-read-timeout", defaultSrvReadTimeout, "Value to use for the http.Server's ReadTimeout option")
+
+	fs.BoolVar(&cfg.EnableMetrics, "enable-metrics", false, "Enable Prometheus metrics endpoint and middleware")
+	fs.BoolVar(&cfg.EnableTracing, "enable-tracing", false, "Enable OpenTelemetry tracing middleware")
 
 	// Here be dragons! This flag is only for backwards compatibility and
 	// should not be used in production.
@@ -341,6 +359,13 @@ func loadConfig(args []string, getEnvVal func(string) string, getEnviron func() 
 		if err != nil {
 			return nil, configErr("invalid value %#v for env var SRV_READ_TIMEOUT: parse error", getEnvVal("SRV_READ_TIMEOUT"))
 		}
+	}
+
+	if getEnvBool(getEnvVal("ENABLE_METRICS")) {
+		cfg.EnableMetrics = true
+	}
+	if getEnvBool(getEnvVal("ENABLE_TRACING")) {
+		cfg.EnableTracing = true
 	}
 
 	if getEnvBool(getEnvVal("UNSAFE_ALLOW_DANGEROUS_RESPONSES")) {

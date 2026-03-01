@@ -5,6 +5,8 @@ services:
       - "8080:8080"
     environment:
       - LOG_FORMAT=json
+      - ENABLE_METRICS=true
+      - ENABLE_TRACING=true
 
   loki:
     image: grafana/loki:latest
