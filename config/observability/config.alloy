@@ -1,0 +1,94 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// 1. Dapatkan semua docker container di host
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// 2. Filter hanya container dari project ini (go-httpbin)
+discovery.relabel "go_httpbin_containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    regex         = "go-httpbin.*"
+    action        = "keep"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+}
+
+// 3. Scrape logs dari container yang difilter
+loki.source.docker "logs" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.go_httpbin_containers.output
+  forward_to = [loki.process.parse_json.receiver]
+}
+
+// 4. Parse JSON logs agar lebih terstruktur di Loki (terutama untuk go-httpbin)
+loki.process "parse_json" {
+  forward_to = [loki.write.local_loki.receiver]
+
+  stage.json {
+    expressions = {
+      level   = "level",
+      msg     = "msg",
+      status  = "status",
+      method  = "method",
+      uri     = "uri",
+    }
+  }
+
+  // Set the "level" label in Loki using the parsed JSON field
+  stage.labels {
+    values = {
+      level = "level",
+    }
+  }
+}
+
+// 5. Kirim logs ke Loki
+loki.write "local_loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// ==========================================
+// PILLAR 3: TRACES (OTLP -> Alloy -> Tempo)
+// ==========================================
+
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure             = true
+      insecure_skip_verify = true
+    }
+  }
+}

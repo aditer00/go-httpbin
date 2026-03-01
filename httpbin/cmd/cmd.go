@@ -20,12 +20,13 @@ import (
 	"time"
 
 	"github.com/mccutchen/go-httpbin/v2/httpbin"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (
 	defaultListenHost = "0.0.0.0"
 	defaultListenPort = 8080
-	defaultLogFormat  = "text"
+	defaultLogFormat  = "json" // Changed to json for observability
 	defaultLogLevel   = "INFO"
 	defaultEnvPrefix  = "HTTPBIN_ENV_"
 
@@ -74,6 +75,18 @@ func mainImpl(args []string, getEnvVal func(string) string, getEnviron func() []
 
 	logger := setupLogger(out, cfg.LogFormat, cfg.LogLevel)
 
+	ctx := context.Background()
+	tp, err := initTracer(ctx, os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if err != nil {
+		logger.Error(fmt.Sprintf("failed to initialize OpenTelemetry tracer: %v", err))
+	} else {
+		defer func() {
+			if err := tp.Shutdown(ctx); err != nil {
+				logger.Error(fmt.Sprintf("failed to shutdown TracerProvider: %v", err))
+			}
+		}()
+	}
+
 	opts := []httpbin.OptionFunc{
 		httpbin.WithEnv(cfg.Env),
 		httpbin.WithMaxBodySize(cfg.MaxBodySize),
@@ -95,9 +108,17 @@ func mainImpl(args []string, getEnvVal func(string) string, getEnviron func() []
 	}
 	app := httpbin.New(opts...)
 
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metricsEndpoint())
+	mux.Handle("/", metricsHandler(otelhttp.NewHandler(app.Handler(), "go-httpbin",
+		otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
+			return fmt.Sprintf("%s %s", r.Method, r.URL.Path)
+		}),
+	)))
+
 	srv := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenHost, strconv.Itoa(cfg.ListenPort)),
-		Handler:           app.Handler(),
+		Handler:           mux,
 		MaxHeaderBytes:    cfg.SrvMaxHeaderBytes,
 		ReadHeaderTimeout: cfg.SrvReadHeaderTimeout,
 		ReadTimeout:       cfg.SrvReadTimeout,

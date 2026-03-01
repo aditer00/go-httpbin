@@ -32,7 +32,7 @@ const usage = `Usage of go-httpbin:
   -https-key-file string
     	HTTPS Server private key file
   -log-format string
-    	Log format (text or json) (default "text")
+    	Log format (text or json) (default "json")
   -log-level string
     	Logging level (DEBUG, INFO, WARN, ERROR, OFF) (default "INFO")
   -max-body-size int
@@ -618,7 +618,7 @@ func TestMainImpl(t *testing.T) {
 			},
 			wantCode: 1,
 			wantOutFn: func(t *testing.T, out string) {
-				assert.Contains(t, out, `msg="error: listen tcp: address -256: invalid port"`, "server error does not contain expected message")
+				assert.Contains(t, out, `"msg":"error: listen tcp: address -256: invalid port"`, "server error does not contain expected message")
 			},
 		},
 		"tls cert error": {
@@ -630,7 +630,7 @@ func TestMainImpl(t *testing.T) {
 			},
 			wantCode: 1,
 			wantOutFn: func(t *testing.T, out string) {
-				assert.Contains(t, out, `msg="error: open ./https-cert-does-not-exist: no such file or directory"`, "tls cert error does not contain expected message")
+				assert.Contains(t, out, `"msg":"error: open ./https-cert-does-not-exist: no such file or directory"`, "tls cert error does not contain expected message")
 			},
 		},
 		"log format error": {
