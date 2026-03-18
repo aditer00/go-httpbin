@@ -599,13 +599,15 @@ func (h *HTTPBin) Stream(w http.ResponseWriter, r *http.Request) {
 		URL:     getURL(r).String(),
 	}
 
-	f := w.(http.Flusher)
+	flusher, isFlusher := w.(http.Flusher)
 	for i := 0; i < n; i++ {
 		resp.ID = i
 		// Call json.Marshal directly to avoid pretty printing
 		line, _ := json.Marshal(resp)
 		w.Write(append(line, '\n'))
-		f.Flush()
+		if isFlusher {
+			flusher.Flush()
+		}
 	}
 }
 
@@ -644,7 +646,9 @@ func (h *HTTPBin) Trailers(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Trailer", k)
 	}
 	h.RequestWithBody(w, r)
-	w.(http.Flusher).Flush() // force chunked transfer encoding even when no trailers are given
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush() // force chunked transfer encoding even when no trailers are given
+	}
 	for k, vs := range q {
 		for _, v := range vs {
 			w.Header().Set(k, v)
@@ -770,10 +774,12 @@ func (h *HTTPBin) Drip(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(pause)
 	defer ticker.Stop()
 
-	flusher := w.(http.Flusher)
+	flusher, isFlusher := w.(http.Flusher)
 	for i := int64(0); i < numBytes; i++ {
 		w.Write(b)
-		flusher.Flush()
+		if isFlusher {
+			flusher.Flush()
+		}
 
 		// don't pause after last byte
 		if i == numBytes-1 {
@@ -962,10 +968,12 @@ func (h *HTTPBin) handleBytes(w http.ResponseWriter, r *http.Request, streaming 
 		}
 
 		write = func() func(chunk []byte) {
-			f := w.(http.Flusher)
+			f, isFlusher := w.(http.Flusher)
 			return func(chunk []byte) {
 				w.Write(chunk)
-				f.Flush()
+				if isFlusher {
+					f.Flush()
+				}
 			}
 		}()
 	} else {
@@ -1274,12 +1282,14 @@ func (h *HTTPBin) SSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", sseContentType)
 	w.WriteHeader(http.StatusOK)
 
-	flusher := w.(http.Flusher)
+	flusher, isFlusher := w.(http.Flusher)
 
 	// special case when we only have one event to write
 	if count == 1 {
 		writeServerSentEvent(w, 0, time.Now())
-		flusher.Flush()
+		if isFlusher {
+			flusher.Flush()
+		}
 		return
 	}
 
@@ -1288,7 +1298,9 @@ func (h *HTTPBin) SSE(w http.ResponseWriter, r *http.Request) {
 
 	for i := 0; i < count; i++ {
 		writeServerSentEvent(w, i, time.Now())
-		flusher.Flush()
+		if isFlusher {
+			flusher.Flush()
+		}
 
 		// don't pause after last byte
 		if i == count-1 {

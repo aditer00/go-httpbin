@@ -89,8 +89,9 @@ func (mw *metaResponseWriter) WriteHeader(s int) {
 }
 
 func (mw *metaResponseWriter) Flush() {
-	f := mw.w.(http.Flusher)
-	f.Flush()
+	if f, ok := mw.w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (mw *metaResponseWriter) Header() http.Header {
